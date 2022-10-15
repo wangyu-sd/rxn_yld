@@ -7,16 +7,18 @@
 import torch
 from torch import nn
 from data.data_utils import AtomFeaParser
+from torch.nn import functional as F
 PI = 3.14159
 A = (2 * PI) ** 0.5
 import math
+
 
 class RxnYdEmbeddingLayer(nn.Module):
     def __init__(self, d_model, n_head, max_single_hop, n_layers, need_graph_token, use_3d_info=False, dropout=0.,
                  known_rxn_cnt=True, use_dist_adj=True):
         super(RxnYdEmbeddingLayer, self).__init__()
 
-        self.atom_encoder = AtomFeaEmbedding(d_model,  n_layers, need_graph_token, known_rxn_cnt=known_rxn_cnt)
+        self.atom_encoder = AtomFeaEmbedding(d_model, n_layers, need_graph_token, known_rxn_cnt=known_rxn_cnt)
         self.edge_encoder = EdgeEmbedding(d_model, n_head, max_single_hop, n_layers, need_graph_token,
                                           use_3d_info=use_3d_info, known_rxn_cnt=known_rxn_cnt,
                                           use_dist_adj=use_dist_adj)
@@ -31,8 +33,8 @@ class AtomFeaEmbedding(nn.Module):
         super(AtomFeaEmbedding, self).__init__()
         self.known_rxn_cnt = known_rxn_cnt
         self.atom_encoders = nn.ModuleList(
-            [nn.Embedding(AtomFeaParser().discrete_max[i]+1, d_model, padding_idx=0)
-            for i in range(len(AtomFeaParser().discrete_max))] +
+            [nn.Embedding(AtomFeaParser().discrete_max[i] + 1, d_model, padding_idx=0)
+             for i in range(len(AtomFeaParser().discrete_max))] +
             [GaussianAtomLayer(d_model, means=(-1, 1), stds=(0.1, 10))]
         )
         self.need_graph_token = need_graph_token
@@ -54,7 +56,7 @@ class AtomFeaEmbedding(nn.Module):
         out = self.atom_encoders[-1](atom_fea[:, -1])
 
         for idx in range(n_fea_type - 1):
-            # print(self.atom_encoders[idx].weight.size(), atom_fea[:, idx].max(dim=0))
+            # print(idx, atom_fea[:, idx].int().max(), atom_fea[:, idx].int().min())
             out += self.atom_encoders[idx](atom_fea[:, idx].int())
 
         if self.need_graph_token:
@@ -95,6 +97,7 @@ class EdgeEmbedding(nn.Module):
         self.max_single_hop = max_single_hop
         self.use_3d_info = use_3d_info
         self.use_dist_adj = use_dist_adj
+        self.max_paths = max_paths
         # self.hop_distribution = [1 << i for i in range(int(math.log2(n_head) - 1), -1, -1)]
         # self.hop_distribution[-1] += 1
         # assert sum(self.hop_distribution) == self.num_heads
@@ -140,9 +143,10 @@ class EdgeEmbedding(nn.Module):
         # ], dim=1)  # [bsz, n_hop, n_type, n_atom, n_atom] -> # [bsz, n_head, n_atom, n_atom]
 
         bsz, n_atom, _ = bond_adj.size()
-        comb_embed = torch.zeros(bsz, n_atom, n_atom, self.num_heads, device=bond_adj.device)
         if self.use_dist_adj and dist_adj is not None:
-            comb_embed += self.spatial_encoder(dist_adj)
+            comb_embed = self.spatial_encoder(dist_adj)
+        else:
+            comb_embed = torch.zeros(bsz, n_atom, n_atom, self.num_heads, device=bond_adj.device)
         if self.use_3d_info and dist3d_adj is not None:
             comb_embed += self.spatial3d_encoder(dist3d_adj)
 
@@ -158,6 +162,8 @@ class EdgeEmbedding(nn.Module):
                 for j in range(1, self.max_single_hop):
                     # generate multi atom environment embedding
                     j_hop_embed = torch.bmm(j_hop_embed, base_hop_embed)
+                    # print(j_hop_embed.max())
+                    j_hop_embed = - F.relu(-j_hop_embed + self.max_single_hop) + self.max_single_hop
                     comb_embed += self.edge_encoders[i](j_hop_embed.int())
 
         comb_embed = comb_embed.permute(0, 3, 1, 2)
@@ -168,7 +174,6 @@ class EdgeEmbedding(nn.Module):
             if contrast:
                 graph_token += self.contrast_token.weight[0]
             graph_token = graph_token.view(1, self.num_heads, 1, 1).repeat(bsz, 1, 1, 1)
-
 
             if self.known_rxn_cnt:
                 graph_token += self.cnt_token(center_cnt).view(bsz, self.num_heads, 1, 1)
@@ -186,7 +191,7 @@ class EdgeEmbedding(nn.Module):
 
         mask = mask.unsqueeze(1).expand(bsz, self.num_heads, n_atom, n_atom)
 
-        return (comb_embed + mask).reshape(bsz * self.num_heads, n_atom, n_atom)
+        return (comb_embed + mask).view(bsz * self.num_heads, n_atom, n_atom)
 
 
 def gaussian(x, mean, std):
