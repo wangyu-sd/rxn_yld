@@ -51,7 +51,7 @@ class AtomFeaParser:
             4,   # 6    max chiral tag state number
             20,  # 7    max formal charge number
             4,   # 8    reactant/product/catalyst/<PAD>
-            10,   # 9    if in reaction center
+            50,   # 9    if in reaction center
         )
         self.num_continuous_fea = 1
 
