@@ -38,7 +38,7 @@ def main():
     parser.add_argument('--dataset', type=str, default="data/uspto")
     parser.add_argument('--not_fast_read', default=False, action='store_true')
     parser.add_argument('--use_3d_info', default=False, action='store_true')
-    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--num_workers', type=int, default=16)
     parser.add_argument('--dataset_format', type=str, default='uspto')
 
     args = parser.parse_args()
@@ -83,7 +83,7 @@ def main():
 def build_trainer(args):
     logger = TensorBoardLogger(args.log_dir, name=args.name)
     lr_monitor = LearningRateMonitor(logging_interval="step")
-    checkpoint_cb = ModelCheckpoint(monitor="loss", save_last=True, mode='min')
+    checkpoint_cb = ModelCheckpoint(monitor="loss_mse", save_last=True, mode='min')
 
     trainer = Trainer(
         accelerator='gpu',
@@ -94,7 +94,7 @@ def build_trainer(args):
         # accumulate_grad_batches=args.acc_batches,
         callbacks=[lr_monitor, checkpoint_cb],
         check_val_every_n_epoch=10,
-        log_every_n_steps=50,
+        log_every_n_steps=500,
         detect_anomaly=True,
         precision=16 if not args.predict else 32
     )
